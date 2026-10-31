@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Digital Dragonfly · Matrix Abyss</title>
+<style>
+  :root { --g:#00ff66; --c:#00ffcc; --void:#010806; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:var(--void); touch-action:none; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  .fx { position:fixed; inset:0; pointer-events:none; }
+  .scan { background:repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.28) 3px); mix-blend-mode:multiply; }
+  .vig { background:radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,6,3,.55) 78%, rgba(0,0,0,.95) 100%); }
+  .bloom { background:radial-gradient(circle at 50% 45%, rgba(0,255,204,.07), transparent 55%); mix-blend-mode:screen; }
+  .hud { position:fixed; left:18px; bottom:14px; font:11px/1.5 ui-monospace, Menlo, Consolas, monospace; color:rgba(0,255,150,.55); letter-spacing:.18em; text-transform:uppercase; pointer-events:none; text-shadow:0 0 8px rgba(0,255,102,.6); }
+  .hud b { color:var(--c); font-weight:normal; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div class="fx bloom"></div><div class="fx scan"></div><div class="fx vig"></div>
+<div class="hud">// ODONATA.SYS_v1.0<br>WINGBEAT <b id="hz">0</b> HZ · move cursor to guide</div>
+<script>
+(() => {
+  'use strict';
+  const cv = document.getElementById('cv'), ctx = cv.getContext('2d'), hzEl = document.getElementById('hz');
+  const TAU = Math.PI * 2;
+  const CHARS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖ0123456789:.=*+-<>'.split('');
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  let W, H, DPR, R, layers = [];
+  const mouse = { x: 0, y: 0, sx: 0, sy: 0, active: false };
+  const D = { x: 0, y: 0, vx: 0, vy: 0, ang: 0, bend: 0, phase: 0, speed: 0 };
+
+  function buildLayers() {
+    layers = [{ size: 13, speed: 5, trail: 9, alpha: .3, par: .015 }, { size: 19, speed: 9, trail: 14, alpha: .7, par: .045 }].map(d => {
+      const cols = Math.ceil(W / d.size) + 4;
+      return { ...d, cols, rows: Math.ceil(H / d.size),
+        seed: Array.from({ length: cols }, () => Math.random() * 400),
+        spd: Array.from({ length: cols }, () => d.speed * (.55 + Math.random() * .9)),
+        len: Array.from({ length: cols }, () => Math.floor(d.trail * (.5 + Math.random() * .8))) };
+    });
+  }
+
+  function drawRain(time) {
+    const ox0 = mouse.sx - W / 2, oy0 = mouse.sy - H / 2;
+    for (const L of layers) {
+      const ox = -ox0 * L.par - 2 * L.size, oy = -oy0 * L.par;
+      ctx.font = `${L.size}px "Courier New", monospace`; ctx.textAlign = 'center';
+      for (let c = 0; c < L.cols; c++) {
+        const head = (time * L.spd[c] + L.seed[c]) % (L.rows + L.len[c]);
+        const x = c * L.size + ox;
+        for (let k = 0; k < L.len[c]; k++) {
+          const row = Math.floor(head) - k;
+          if (row < 0 || row > L.rows) continue;
+          const y = row * L.size + oy;
+          const boost = clamp(1 - Math.hypot(x - D.x, y - D.y) / (R * 3), 0, 1);
+          const a = (1 - k / L.len[c]) * L.alpha + boost * .55;
+          if (a < .03) continue;
+          ctx.fillStyle = k === 0 ? `rgba(200,255,235,${clamp(a + .25, 0, 1)})` : `rgba(0,255,${Math.floor(102 + boost * 102)},${clamp(a, 0, 1)})`;
+          ctx.fillText(CHARS[(c * 7 + row * 13 + Math.floor(time * 3 + c)) % CHARS.length], x, y);
+        }
+      }
+    }
+  }
+
+  /* particles */
+  const parts = [];
+  function emit(x, y, v) {
+    if (parts.length > 300) return;
+    const a = Math.random() * TAU, s = Math.random() * v;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0, max: 1 + Math.random() * 1.8, size: .8 + Math.random() * 1.8, hue: Math.random() < .5 ? '0,255,102' : '0,255,204' });
+  }
+  function stepParts(dt) {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i]; p.life += dt;
+      if (p.life > p.max) { parts.splice(i, 1); continue; }
+      p.vx *= .985; p.vy *= .985; p.x += p.vx * dt * 60; p.y += p.vy * dt * 60;
+    }
+  }
+  function drawParts() {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of parts) {
+      ctx.fillStyle = `rgba(${p.hue},${Math.sin(p.life / p.max * Math.PI) * .85})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* dragonfly physics: darts, hovers, banks toward cursor */
+  let prevAng = 0;
+  function updateFly(dt, time) {
+    const idleX = W / 2 + Math.sin(time * .43) * W * .3, idleY = H / 2 + Math.sin(time * .71 + 1) * H * .22;
+    const tx = (mouse.active ? mouse.sx : idleX) + Math.sin(time * 2.3) * R * .25;
+    const ty = (mouse.active ? mouse.sy : idleY) + Math.cos(time * 1.9) * R * .25;
+    D.vx += (tx - D.x) * 2.4 * dt; D.vy += (ty - D.y) * 2.4 * dt;
+    const damp = Math.pow(.1, dt); D.vx *= damp; D.vy *= damp;
+    D.x += D.vx * dt; D.y += D.vy * dt;
+    D.speed = Math.hypot(D.vx, D.vy);
+    if (D.speed > 30) {
+      const target = Math.atan2(D.vy, D.vx);
+      let d = target - D.ang; d = Math.atan2(Math.sin(d), Math.cos(d));
+      D.ang += d * (1 - Math.pow(.03, dt));
+    }
+    let da = Math.atan2(Math.sin(D.ang - prevAng), Math.cos(D.ang - prevAng)); prevAng = D.ang;
+    D.bend = lerp(D.bend, clamp(da / Math.max(dt, .001) * .12, -1, 1), 1 - Math.pow(.01, dt));
+    const hz = 28 + clamp(D.speed / 40, 0, 1) * 14;
+    D.phase += dt * hz * TAU * .5; hzEl.textContent = hz.toFixed(0);
+  }
+
+  function wing(side, rootX, len, wid, sweep, flap, alpha) {
+    ctx.save();
+    ctx.translate(rootX, side * R * .09); ctx.scale(1, side); ctx.rotate(sweep); ctx.scale(1, flap);
+    const g = ctx.createLinearGradient(0, 0, 0, len);
+    g.addColorStop(0, `rgba(0,255,204,${alpha * .45})`); g.addColorStop(1, `rgba(0,255,102,${alpha * .12})`);
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(wid * .6, len * .15, wid * .55, len * .85, 0, len);
+    ctx.bezierCurveTo(-wid * .5, len * .8, -wid * .55, len * .2, 0, 0);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = `rgba(0,255,204,${alpha})`; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.strokeStyle = `rgba(150,255,210,${alpha * .6})`; ctx.lineWidth = .7;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, len);               // main vein
+    for (let i = 1; i < 8; i++) {                                         // cross veins
+      const y = len * i / 8, w = wid * .5 * Math.sin(i / 8 * Math.PI) * .95;
+      ctx.moveTo(-w, y); ctx.lineTo(w, y + len * .03);
+    }
+    ctx.moveTo(0, len * .2); ctx.lineTo(wid * .45, len * .75); ctx.moveTo(0, len * .2); ctx.lineTo(-wid * .45, len * .7);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`; ctx.fillRect(-1.5, len * .86, 3, len * .06); // pterostigma
+    ctx.restore();
+  }
+
+  function drawFly(time) {
+    const s = R, beat = Math.sin(D.phase), beat2 = Math.sin(D.phase + Math.PI);
+    const tipFx = [];
+    ctx.save(); ctx.translate(D.x, D.y); ctx.rotate(D.ang);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowColor = '#00ffcc'; ctx.shadowBlur = 18;
+
+    // wings (forewings leading, hindwings opposite phase)
+    const fl = s * 1.55, hl = s * 1.45;
+    for (const side of [-1, 1]) {
+      wing(side, s * .12, hl, s * .62, .55 + beat2 * .38, .72 + .28 * Math.cos(D.phase + Math.PI), .75);
+      wing(side, s * .3, fl, s * .5, -.35 + beat * .38, .72 + .28 * Math.cos(D.phase), .85);
+    }
+    ctx.shadowBlur = 12;
+
+    // abdomen: tapered, segmented, bending with turn
+    const n = 15, seg = s * .26; let px = -s * .25, py = 0, ang = Math.PI;
+    for (let i = 0; i < n; i++) {
+      const f = i / n;
+      ang += D.bend * .09 + Math.sin(time * 3 - i * .5) * .012;
+      const nx = px + Math.cos(ang) * seg, ny = py + Math.sin(ang) * seg;
+      ctx.strokeStyle = `rgba(0,255,${Math.floor(204 - f * 100)},${.95 - f * .35})`;
+      ctx.lineWidth = s * .2 * (1 - f * .65) + 1; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(nx, ny); ctx.stroke();
+      ctx.strokeStyle = `rgba(0,40,20,.9)`; ctx.lineWidth = 1.2;                 // joint line
+      ctx.beginPath(); ctx.arc(nx, ny, s * .1 * (1 - f * .6), 0, TAU); ctx.stroke();
+      if (i === n - 1) { // cerci
+        ctx.strokeStyle = 'rgba(0,255,204,.9)'; ctx.lineWidth = 1.4;
+        for (const d of [-.3, .3]) { ctx.beginPath(); ctx.moveTo(nx, ny); ctx.lineTo(nx + Math.cos(ang + d) * s * .3, ny + Math.sin(ang + d) * s * .3); ctx.stroke(); }
+      }
+      px = nx; py = ny;
+    }
+
+    // thorax
+    const tg = ctx.createRadialGradient(s * .1, 0, 1, s * .1, 0, s * .45);
+    tg.addColorStop(0, 'rgba(200,255,235,.95)'); tg.addColorStop(1, 'rgba(0,255,102,.55)');
+    ctx.fillStyle = tg; ctx.beginPath(); ctx.ellipse(s * .12, 0, s * .42, s * .24, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,255,204,.9)'; ctx.lineWidth = 1.2; ctx.stroke();
+
+    // legs
+    ctx.strokeStyle = 'rgba(0,255,150,.55)'; ctx.lineWidth = 1;
+    for (const side of [-1, 1]) for (let i = 0; i < 3; i++) {
+      const bx = s * (.0 + i * .14), swing = Math.sin(time * 2 + i + side) * .08;
+      ctx.beginPath(); ctx.moveTo(bx, side * s * .16);
+      ctx.lineTo(bx + s * (.18 + swing), side * s * .42); ctx.lineTo(bx + s * (.05 + swing), side * s * .6); ctx.stroke();
+    }
+
+    // head + compound eyes
+    ctx.fillStyle = 'rgba(0,255,102,.7)'; ctx.beginPath(); ctx.ellipse(s * .6, 0, s * .17, s * .2, 0, 0, TAU); ctx.fill();
+    for (const side of [-1, 1]) {
+      const eg = ctx.createRadialGradient(s * .68, side * s * .14, 1, s * .66, side * s * .14, s * .2);
+      eg.addColorStop(0, 'rgba(230,255,245,1)'); eg.addColorStop(.5, 'rgba(0,255,204,.8)'); eg.addColorStop(1, 'rgba(0,255,102,.2)');
+      ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(s * .66, side * s * .14, s * .16, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,60,30,.6)'; ctx.lineWidth = .6;                    // ommatidia grid
+      for (let k = -1; k <= 1; k++) { ctx.beginPath(); ctx.moveTo(s * .52, side * s * .14 + k * s * .06); ctx.lineTo(s * .8, side * s * .14 + k * s * .06); ctx.stroke(); }
+    }
+    ctx.restore();
+
+    // wingtip sparks (world space)
+    if (Math.random() < .5) {
+      const c = Math.cos(D.ang), sn = Math.sin(D.ang), side = Math.random() < .5 ? -1 : 1;
+      const lx = s * .3, ly = side * s * 1.5 * .9;
+      emit(D.x + lx * c - ly * sn, D.y + lx * sn + ly * c, .8);
+    }
+    ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'source-over';
+  }
+
+  let last = performance.now(), t0 = last;
+  function frame(now) {
+    const dt = Math.min(.05, (now - last) / 1000); last = now;
+    const time = (now - t0) / 1000;
+    if (!mouse.active) { mouse.x = W / 2 + Math.sin(time * .3) * W * .1; mouse.y = H / 2; }
+    const k = 1 - Math.pow(.05, dt);
+    mouse.sx = lerp(mouse.sx, mouse.x, k); mouse.sy = lerp(mouse.sy, mouse.y, k);
+    ctx.fillStyle = 'rgba(1,8,6,.34)'; ctx.fillRect(0, 0, W, H);
+    updateFly(dt, time); drawRain(time); stepParts(dt); drawFly(time); drawParts();
+    requestAnimationFrame(frame);
+  }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.fillStyle = '#010806'; ctx.fillRect(0, 0, W, H);
+    R = Math.min(W, H) * .1;
+    mouse.sx = mouse.x = D.x = W / 2; mouse.sy = mouse.y = D.y = H / 2;
+    buildLayers();
+  }
+  addEventListener('resize', resize);
+  const move = e => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true; };
+  addEventListener('pointermove', move, { passive: true });
+  addEventListener('pointerdown', move, { passive: true });
+  addEventListener('pointerleave', () => { mouse.active = false; });
+  resize(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
